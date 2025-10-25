@@ -7,5 +7,4 @@ export interface ChecklistItemData {
   status: CheckStatus;
   notes: string;
   isAnalyzing?: boolean;
-  syncStatus?: 'unsynced' | 'syncing' | 'synced' | 'error';
 }

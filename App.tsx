@@ -4,10 +4,8 @@ import { CAR_PARTS } from './constants';
 import Checklist from './components/Checklist';
 import Header from './components/Header';
 import PdfReport from './components/PdfReport';
-import Settings from './components/Settings';
 import CarIdentity from './components/CarIdentity';
 import CameraCapture from './components/CameraCapture';
-import { sendToGoogleSheets } from './services/googleSheetService';
 import { extractTextFromImage, analyzeCarPartImage } from './services/geminiService';
 
 
@@ -19,7 +17,6 @@ declare global {
 }
 
 const App: React.FC = () => {
-  const [inspectionId] = useState(() => new Date().toISOString());
   const [checklistItems, setChecklistItems] = useState<ChecklistItemData[]>(
     CAR_PARTS.map(part => ({
       ...part,
@@ -27,12 +24,9 @@ const App: React.FC = () => {
       status: 'unchecked',
       notes: '',
       isAnalyzing: false,
-      syncStatus: 'unsynced',
     }))
   );
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [googleSheetUrl, setGoogleSheetUrl] = useState<string>(() => localStorage.getItem('googleSheetUrl') || '');
   
   const [carIdentity, setCarIdentity] = useState({ licensePlate: '', odometer: '' });
   const [isProcessingId, setIsProcessingId] = useState<'licensePlate' | 'odometer' | null>(null);
@@ -76,7 +70,6 @@ const App: React.FC = () => {
                 status: result.status,
                 notes: result.description,
                 isAnalyzing: false,
-                syncStatus: 'unsynced'
             });
         } catch (error) {
              console.error(`Failed to analyze ${targetItem.label}`, error);
@@ -84,34 +77,10 @@ const App: React.FC = () => {
                 isAnalyzing: false,
                 notes: 'Gagal menganalisis gambar. Harap periksa manual.',
                 status: 'not-good',
-                syncStatus: 'unsynced'
              });
         }
     }
   };
-
-  useEffect(() => {
-    if (!googleSheetUrl) return;
-
-    const itemToSync = checklistItems.find(item => 
-      item.status !== 'unchecked' &&
-      !item.isAnalyzing &&
-      item.syncStatus === 'unsynced'
-    );
-
-    if (itemToSync) {
-      handleUpdateItem(itemToSync.id, { syncStatus: 'syncing' });
-
-      sendToGoogleSheets(googleSheetUrl, itemToSync, inspectionId, carIdentity)
-        .then(() => {
-          handleUpdateItem(itemToSync.id, { syncStatus: 'synced' });
-        })
-        .catch(error => {
-          console.error("Failed to sync with Google Sheets:", error);
-          handleUpdateItem(itemToSync.id, { syncStatus: 'error' });
-        });
-    }
-  }, [checklistItems, googleSheetUrl, handleUpdateItem, inspectionId, carIdentity]);
 
   const handleGeneratePdf = async () => {
     setIsGeneratingPdf(true);
@@ -143,24 +112,11 @@ const App: React.FC = () => {
     }
   };
   
-  const handleSaveSettings = (url: string) => {
-    setGoogleSheetUrl(url);
-    localStorage.setItem('googleSheetUrl', url);
-    setShowSettings(false);
-  };
-
   const allItemsChecked = checklistItems.every(item => item.status !== 'unchecked');
 
   return (
     <div className="min-h-screen bg-slate-100 font-sans">
-      <Header onToggleSettings={() => setShowSettings(true)} />
-       {showSettings && (
-        <Settings
-          initialUrl={googleSheetUrl}
-          onSave={handleSaveSettings}
-          onClose={() => setShowSettings(false)}
-        />
-      )}
+      <Header />
       {cameraTarget && <CameraCapture onCapture={handleCapture} onClose={() => setCameraTarget(null)} />}
       <main className="container mx-auto p-4 md:p-6 lg:p-8">
         <CarIdentity 
@@ -174,12 +130,6 @@ const App: React.FC = () => {
           <p className="text-slate-600">
             Lakukan pengecekan pada setiap bagian mobil. Ambil foto, berikan status (Good/Not Good), dan tambahkan catatan. AI akan membantu menganalisis kerusakan.
           </p>
-           {!googleSheetUrl && (
-            <div className="mt-4 p-3 bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700">
-              <p className="font-bold">Fitur Google Sheets belum aktif.</p>
-              <p>Klik ikon pengaturan di pojok kanan atas untuk menghubungkan aplikasi dengan Google Sheets.</p>
-            </div>
-          )}
         </div>
         <Checklist items={checklistItems} onUpdateItem={handleUpdateItem} onTakePhoto={(id) => setCameraTarget(id)} />
         <div className="mt-8 flex justify-center">
