@@ -1,0 +1,7 @@
+{
+  "name": "Walk Around Check",
+  "description": "An application to perform a walk-around check of a car, capture photos of each part, assess its condition with AI assistance, and generate a downloadable PDF report.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
