@@ -2,7 +2,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 
 export async function extractTextFromImage(
   base64Image: string,
-  context: 'license-plate' | 'odometer'
+  context: 'licensePlate' | 'odometer'
 ): Promise<string> {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
 
@@ -14,7 +14,7 @@ export async function extractTextFromImage(
     },
   };
 
-  const promptText = context === 'license-plate'
+  const promptText = context === 'licensePlate'
     ? "Anda adalah spesialis Optical Character Recognition (OCR). Ekstrak nomor plat dari gambar. Kembalikan hanya karakter alfanumerik dari plat nomor."
     : "Anda adalah spesialis Optical Character Recognition (OCR). Ekstrak pembacaan odometer dari gambar. Kembalikan hanya angka, hapus unit apa pun seperti 'km' atau 'mi'.";
 

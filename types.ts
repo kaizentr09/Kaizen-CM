@@ -8,3 +8,13 @@ export interface ChecklistItemData {
   notes: string;
   isAnalyzing?: boolean;
 }
+
+export interface SavedInspection {
+  id: string;
+  date: string;
+  carIdentity: {
+    licensePlate: string;
+    odometer: string;
+  };
+  items: ChecklistItemData[];
+}

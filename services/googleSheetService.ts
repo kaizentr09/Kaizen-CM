@@ -8,15 +8,16 @@ export async function sendToGoogleSheets(
 ): Promise<void> {
   const payload = {
     inspectionId: inspectionId,
-    timestamp: new Date().toLocaleString('id-ID'),
+    timestamp: new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }),
     licensePlate: carIdentity.licensePlate || 'N/A',
     odometer: carIdentity.odometer || 'N/A',
     part: itemData.label,
     status: itemData.status,
     notes: itemData.notes,
+    photo: itemData.photo ? itemData.photo.split(',')[1] : null, // Send base64 string
   };
 
-  const response = await fetch(url, {
+  await fetch(url, {
     method: 'POST',
     mode: 'no-cors', // Required for simple Apps Script POST requests
     headers: {
@@ -26,12 +27,6 @@ export async function sendToGoogleSheets(
     redirect: 'follow',
   });
 
-  // Note: With 'no-cors', we can't inspect the response body for success.
+  // Note: With 'no-cors', we can't inspect the response for success.
   // We assume success if the request doesn't throw a network error.
-  // The Apps Script handles the data appending.
-  if (response.type === 'opaque' || response.ok) {
-     return Promise.resolve();
-  } else {
-     return Promise.reject(new Error('Failed to send data to Google Sheets'));
-  }
 }

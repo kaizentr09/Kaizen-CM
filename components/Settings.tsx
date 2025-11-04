@@ -9,22 +9,59 @@ interface SettingsProps {
 const Settings: React.FC<SettingsProps> = ({ initialUrl, onSave, onClose }) => {
   const [url, setUrl] = useState(initialUrl);
 
-  const scriptCode = `function doPost(e) {
+  const scriptCode = `var FOLDER_NAME = "Walkaround Check Photos";
+
+function getDriveFolder() {
+  var folders = DriveApp.getFoldersByName(FOLDER_NAME);
+  if (folders.hasNext()) {
+    return folders.next();
+  } else {
+    var folder = DriveApp.createFolder(FOLDER_NAME);
+    folder.setDescription("Images uploaded from the Walkaround Check application.");
+    return folder;
+  }
+}
+
+function doPost(e) {
   try {
     var sheetName = "Walkaround Checks";
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
     if (!sheet) {
       sheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet(sheetName);
-      sheet.getRange("A1:G1").setValues([["Inspection ID", "Timestamp", "License Plate", "Odometer (km)", "Car Part", "Status", "Notes"]]).setFontWeight("bold");
+      sheet.getRange("A1:H1").setValues([["Inspection ID", "Timestamp", "License Plate", "Odometer (km)", "Car Part", "Status", "Notes", "Photo"]]).setFontWeight("bold");
+      sheet.setColumnWidth(8, 150); // Set width for photo column
     }
     
     var data = JSON.parse(e.postData.contents);
     
+    var photoUrl = "";
+    if (data.photo) {
+      try {
+        var decodedImage = Utilities.base64Decode(data.photo, Utilities.Charset.UTF_8);
+        var blob = Utilities.newBlob(decodedImage, 'image/jpeg', data.inspectionId + '-' + data.part + '.jpg');
+        var folder = getDriveFolder();
+        
+        var files = folder.getFilesByName(blob.getName());
+        var file;
+        if (files.hasNext()) {
+          file = files.next();
+          file.setContent(blob.getBytes());
+        } else {
+          file = folder.createFile(blob);
+        }
+        
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        
+        photoUrl = '=IMAGE("' + 'https://drive.google.com/uc?export=view&id=' + file.getId() + '")';
+      } catch (f_err) {
+        photoUrl = "Error uploading image: " + f_err.toString();
+      }
+    }
+
     var dataRange = sheet.getDataRange();
     var values = dataRange.getValues();
     var rowIndex = -1;
     
-    // Check if a row for this inspection ID and car part already exists
     for (var i = 1; i < values.length; i++) {
       if (values[i][0] == data.inspectionId && values[i][4] == data.part) {
         rowIndex = i + 1;
@@ -32,19 +69,18 @@ const Settings: React.FC<SettingsProps> = ({ initialUrl, onSave, onClose }) => {
       }
     }
     
-    var newRowData = [data.inspectionId, data.timestamp, data.licensePlate, data.odometer, data.part, data.status, data.notes];
+    var newRowData = [data.inspectionId, data.timestamp, data.licensePlate, data.odometer, data.part, data.status, data.notes, photoUrl];
     
     if (rowIndex != -1) {
-      // Update existing row
-      sheet.getRange(rowIndex, 1, 1, 7).setValues([newRowData]);
+      sheet.getRange(rowIndex, 1, 1, 8).setValues([newRowData]);
     } else {
-      // Append new row
       sheet.appendRow(newRowData);
     }
     
     return ContentService.createTextOutput(JSON.stringify({ "status": "success", "action": rowIndex != -1 ? "updated" : "appended" })).setMimeType(ContentService.MimeType.JSON);
     
   } catch (error) {
+    Logger.log(error.toString());
     return ContentService.createTextOutput(JSON.stringify({ "status": "error", "message": error.toString() })).setMimeType(ContentService.MimeType.JSON);
   }
 }`;
@@ -85,7 +121,7 @@ const Settings: React.FC<SettingsProps> = ({ initialUrl, onSave, onClose }) => {
               <li>Klik ikon roda gigi di sebelah "Select type", lalu pilih <strong>Web app</strong>.</li>
               <li>Pada bagian "Who has access", pilih <strong>Anyone</strong> (PENTING!).</li>
               <li>Klik <strong>Deploy</strong>.</li>
-              <li>Klik <strong>Authorize access</strong> dan izinkan skrip berjalan dengan akun Google Anda.</li>
+              <li>Klik <strong>Authorize access</strong> dan izinkan skrip berjalan dengan akun Google Anda (skrip akan meminta izin untuk mengelola Google Sheets dan Google Drive).</li>
               <li>Salin <strong>Web app URL</strong> yang ditampilkan dan tempel di kolom di atas.</li>
             </ol>
           </div>

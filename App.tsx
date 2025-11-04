@@ -1,12 +1,15 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { ChecklistItemData } from './types';
+import { ChecklistItemData, SavedInspection } from './types';
 import { CAR_PARTS } from './constants';
 import Checklist from './components/Checklist';
 import Header from './components/Header';
 import PdfReport from './components/PdfReport';
 import CarIdentity from './components/CarIdentity';
 import CameraCapture from './components/CameraCapture';
+import Settings from './components/Settings';
+import Reports from './components/Reports';
 import { extractTextFromImage, analyzeCarPartImage } from './services/geminiService';
+import { sendToGoogleSheets } from './services/googleSheetService';
 
 
 declare global {
@@ -27,16 +30,69 @@ const App: React.FC = () => {
     }))
   );
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
-  
   const [carIdentity, setCarIdentity] = useState({ licensePlate: '', odometer: '' });
   const [isProcessingId, setIsProcessingId] = useState<'licensePlate' | 'odometer' | null>(null);
   const [cameraTarget, setCameraTarget] = useState<string | null>(null); // 'licensePlate', 'odometer', or item.id
+  
+  const [showSettings, setShowSettings] = useState(false);
+  const [googleSheetsUrl, setGoogleSheetsUrl] = useState('');
+  const [inspectionId, setInspectionId] = useState(() => `INSP-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
+
+  const [showReports, setShowReports] = useState(false);
+  const [savedInspections, setSavedInspections] = useState<SavedInspection[]>([]);
+  const [pdfDataSource, setPdfDataSource] = useState<{ items: ChecklistItemData[], carIdentity: any } | null>(null);
+
+  useEffect(() => {
+    const storedUrl = localStorage.getItem('googleSheetsUrl');
+    if (storedUrl) {
+      setGoogleSheetsUrl(storedUrl);
+    }
+    const storedInspections = localStorage.getItem('savedInspections');
+    if (storedInspections) {
+      setSavedInspections(JSON.parse(storedInspections));
+    }
+  }, []);
+
+  const handleSaveSettings = (url: string) => {
+    setGoogleSheetsUrl(url);
+    localStorage.setItem('googleSheetsUrl', url);
+    setShowSettings(false);
+  };
+
+  const syncItemToSheets = useCallback(async (item: ChecklistItemData) => {
+    if (!googleSheetsUrl) return;
+    try {
+      await sendToGoogleSheets(googleSheetsUrl, item, inspectionId, carIdentity);
+    } catch (error) {
+      console.error(`Failed to sync ${item.label} to Google Sheets`, error);
+    }
+  }, [googleSheetsUrl, inspectionId, carIdentity]);
+
 
   const handleUpdateItem = useCallback((id: string, update: Partial<ChecklistItemData>) => {
-    setChecklistItems(prevItems =>
-      prevItems.map(item => (item.id === id ? { ...item, ...update } : item))
-    );
-  }, []);
+    let itemToSync: ChecklistItemData | null = null;
+    
+    setChecklistItems(prevItems => {
+        const newItems = prevItems.map(item => {
+            if (item.id === id) {
+                const updatedItem = { ...item, ...update };
+                if (
+                    (update.status && update.status !== 'unchecked') ||
+                    (update.notes !== undefined && item.status !== 'unchecked')
+                ) {
+                    itemToSync = updatedItem;
+                }
+                return updatedItem;
+            }
+            return item;
+        });
+        return newItems;
+    });
+
+    if (itemToSync) {
+        syncItemToSheets(itemToSync);
+    }
+  }, [syncItemToSheets]);
   
   const handleUpdateIdentity = useCallback((update: Partial<typeof carIdentity>) => {
       setCarIdentity(prev => ({ ...prev, ...update }));
@@ -47,7 +103,7 @@ const App: React.FC = () => {
 
     const currentTarget = cameraTarget;
     const targetItem = checklistItems.find(item => item.id === currentTarget);
-    setCameraTarget(null); // Close camera immediately
+    setCameraTarget(null);
     const base64Image = dataUrl.split(',')[1];
 
     if (currentTarget === 'licensePlate' || currentTarget === 'odometer') {
@@ -62,32 +118,42 @@ const App: React.FC = () => {
             setIsProcessingId(null);
         }
     } else if (targetItem) {
-        // It's a checklist item
-        handleUpdateItem(currentTarget, { photo: dataUrl, isAnalyzing: true, status: 'unchecked', notes: 'Menganalisis gambar...' });
+        const initialUpdate = { photo: dataUrl, isAnalyzing: true, status: 'unchecked' as const, notes: 'Menganalisis gambar...' };
+        handleUpdateItem(currentTarget, initialUpdate);
+        
         try {
             const result = await analyzeCarPartImage(base64Image, targetItem.label);
-            handleUpdateItem(currentTarget, {
+            const finalUpdate = {
                 status: result.status,
                 notes: result.description,
                 isAnalyzing: false,
-            });
+            };
+            handleUpdateItem(currentTarget, finalUpdate);
+            syncItemToSheets({ ...targetItem, ...initialUpdate, ...finalUpdate });
         } catch (error) {
              console.error(`Failed to analyze ${targetItem.label}`, error);
-             handleUpdateItem(currentTarget, {
+             const errorUpdate = {
                 isAnalyzing: false,
                 notes: 'Gagal menganalisis gambar. Harap periksa manual.',
-                status: 'not-good',
-             });
+                status: 'not-good' as const,
+             };
+             handleUpdateItem(currentTarget, errorUpdate);
+             syncItemToSheets({ ...targetItem, ...initialUpdate, ...errorUpdate });
         }
     }
   };
-
-  const handleGeneratePdf = async () => {
+  
+  const downloadPdf = async (items: ChecklistItemData[], identity: { licensePlate: string; odometer: string; }) => {
+    setPdfDataSource({ items, carIdentity: identity });
     setIsGeneratingPdf(true);
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
     const reportElement = document.getElementById('pdf-report');
     if (!reportElement) {
       console.error('PDF report element not found');
       setIsGeneratingPdf(false);
+      setPdfDataSource(null);
       return;
     }
 
@@ -103,21 +169,58 @@ const App: React.FC = () => {
       });
 
       pdf.addImage(imgData, 'JPEG', 0, 0, canvas.width, canvas.height);
-      pdf.save(`walk-around-check-${carIdentity.licensePlate || 'mobil'}-${new Date().toISOString().split('T')[0]}.pdf`);
+      pdf.save(`walk-around-check-${identity.licensePlate || 'mobil'}-${new Date().toISOString().split('T')[0]}.pdf`);
     } catch (error) {
       console.error("Error generating PDF:", error);
       alert("Gagal membuat PDF. Silakan coba lagi.");
     } finally {
       setIsGeneratingPdf(false);
+      setPdfDataSource(null);
+    }
+  };
+
+  const handleGeneratePdfAndSave = async () => {
+    await downloadPdf(checklistItems, carIdentity);
+    
+    const newInspection: SavedInspection = {
+        id: inspectionId,
+        date: new Date().toISOString(),
+        carIdentity,
+        items: checklistItems,
+    };
+    
+    setSavedInspections(prevInspections => {
+        const updatedInspections = [newInspection, ...prevInspections];
+        localStorage.setItem('savedInspections', JSON.stringify(updatedInspections));
+        return updatedInspections;
+    });
+  };
+
+  const handleStartNewInspection = () => {
+    if (window.confirm('Apakah Anda yakin ingin memulai inspeksi baru? Kemajuan saat ini akan direset.')) {
+        setChecklistItems(
+            CAR_PARTS.map(part => ({
+                ...part,
+                photo: null,
+                status: 'unchecked',
+                notes: '',
+                isAnalyzing: false,
+            }))
+        );
+        setCarIdentity({ licensePlate: '', odometer: '' });
+        setInspectionId(`INSP-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
     }
   };
   
   const allItemsChecked = checklistItems.every(item => item.status !== 'unchecked');
+  const reportData = pdfDataSource || { items: checklistItems, carIdentity };
 
   return (
     <div className="min-h-screen bg-slate-100 font-sans">
-      <Header />
+      <Header onShowSettings={() => setShowSettings(true)} onShowReports={() => setShowReports(true)} />
       {cameraTarget && <CameraCapture onCapture={handleCapture} onClose={() => setCameraTarget(null)} />}
+      {showSettings && <Settings initialUrl={googleSheetsUrl} onSave={handleSaveSettings} onClose={() => setShowSettings(false)} />}
+      {showReports && <Reports inspections={savedInspections} onDownload={(inspection) => downloadPdf(inspection.items, inspection.carIdentity)} onClose={() => setShowReports(false)} />}
       <main className="container mx-auto p-4 md:p-6 lg:p-8">
         <CarIdentity 
          identity={carIdentity}
@@ -132,9 +235,9 @@ const App: React.FC = () => {
           </p>
         </div>
         <Checklist items={checklistItems} onUpdateItem={handleUpdateItem} onTakePhoto={(id) => setCameraTarget(id)} />
-        <div className="mt-8 flex justify-center">
+        <div className="mt-8 flex flex-col md:flex-row justify-center items-center gap-4">
           <button
-            onClick={handleGeneratePdf}
+            onClick={handleGeneratePdfAndSave}
             disabled={!allItemsChecked || isGeneratingPdf}
             className="w-full md:w-auto bg-blue-600 text-white font-bold py-3 px-8 rounded-lg shadow-md hover:bg-blue-700 transition-colors duration-300 disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center justify-center"
           >
@@ -150,6 +253,14 @@ const App: React.FC = () => {
               'Unduh Laporan PDF'
             )}
           </button>
+           {allItemsChecked && (
+            <button
+              onClick={handleStartNewInspection}
+              className="w-full md:w-auto bg-slate-600 text-white font-bold py-3 px-8 rounded-lg shadow-md hover:bg-slate-700 transition-colors duration-300 flex items-center justify-center"
+            >
+              Mulai Inspeksi Baru
+            </button>
+          )}
         </div>
         {!allItemsChecked && (
           <p className="text-center text-sm text-red-600 mt-4">
@@ -158,7 +269,7 @@ const App: React.FC = () => {
         )}
       </main>
       <div className="absolute -z-10 -left-[9999px] top-0">
-         <PdfReport items={checklistItems} carIdentity={carIdentity} />
+         <PdfReport items={reportData.items} carIdentity={reportData.carIdentity} />
       </div>
     </div>
   );
